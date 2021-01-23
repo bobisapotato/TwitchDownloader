@@ -1,16 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace TwitchDownloader.Tasks
+﻿namespace TwitchDownloaderCore
 {
     public enum ReportType
     {
         Log,
         Percent,
-        Message
+        Message,
+        MessageInfo
     }
 
     public class ProgressReport

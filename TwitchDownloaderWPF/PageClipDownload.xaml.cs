@@ -18,6 +18,10 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using TwitchDownloader;
+using TwitchDownloader.Properties;
+using TwitchDownloaderCore;
+using TwitchDownloaderCore.Options;
 using WpfAnimatedGif;
 
 namespace TwitchDownloaderWPF
@@ -27,6 +31,8 @@ namespace TwitchDownloaderWPF
     /// </summary>
     public partial class PageClipDownload : Page
     {
+        public string clipId = "";
+        public DateTime currentVideoTime;
         public PageClipDownload()
         {
             InitializeComponent();
@@ -34,7 +40,7 @@ namespace TwitchDownloaderWPF
 
         private async void btnGetInfo_Click(object sender, RoutedEventArgs e)
         {
-            string clipId = ValidateUrl(textUrl.Text);
+            clipId = ValidateUrl(textUrl.Text);
             if (clipId == "")
             {
                 MessageBox.Show("Please enter a valid clip ID/URL" + Environment.NewLine + "Examples:" + Environment.NewLine + "https://clips.twitch.tv/ImportantPlausibleMetalOSsloth" + Environment.NewLine + "ImportantPlausibleMetalOSsloth", "Invalid Video ID/URL", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -45,8 +51,8 @@ namespace TwitchDownloaderWPF
                 {
                     btnGetInfo.IsEnabled = false;
                     comboQuality.Items.Clear();
-                    Task<JObject> taskInfo = InfoHelper.GetClipInfo(clipId);
-                    Task<JArray> taskLinks = InfoHelper.GetClipLinks(clipId);
+                    Task<JObject> taskInfo = TwitchHelper.GetClipInfo(clipId);
+                    Task<JArray> taskLinks = TwitchHelper.GetClipLinks(clipId);
                     await Task.WhenAll(taskInfo, taskLinks);
 
                     JToken clipData = taskInfo.Result;
@@ -57,6 +63,7 @@ namespace TwitchDownloaderWPF
                     imgThumbnail.Source = taskThumb.Result;
                     textStreamer.Text = clipData["broadcaster"]["display_name"].ToString();
                     textCreatedAt.Text = clipData["created_at"].ToString();
+                    currentVideoTime = clipData["created_at"].ToObject<DateTime>().ToLocalTime();
                     textTitle.Text = clipData["title"].ToString();
 
                     foreach (var quality in taskLinks.Result[0]["data"]["clip"]["videoQualities"])
@@ -113,6 +120,7 @@ namespace TwitchDownloaderWPF
 
             saveFileDialog.Filter = "MP4 Files | *.mp4";
             saveFileDialog.RestoreDirectory = true;
+            saveFileDialog.FileName = MainWindow.GetFilename(Settings.Default.TemplateClip, textTitle.Text, clipId, currentVideoTime, textStreamer.Text);
 
             if (saveFileDialog.ShowDialog() == true)
             {
@@ -123,16 +131,12 @@ namespace TwitchDownloaderWPF
                 statusMessage.Text = "Downloading";
                 try
                 {
-                    using (WebClient client = new WebClient())
-                    {
-                        client.DownloadProgressChanged += (sender2, e2) =>
-                        {
-                            statusMessage.Text = String.Format("Downloading {0}%", e2.ProgressPercentage);
-                            statusProgressBar.Value = e2.ProgressPercentage;
-                        };
+                    ClipDownloadOptions downloadOptions = new ClipDownloadOptions();
+                    downloadOptions.Filename = saveFileDialog.FileName;
+                    downloadOptions.Id = clipId;
+                    downloadOptions.Quality = comboQuality.Text;
+                    await new ClipDownloader(downloadOptions).DownloadAsync();
 
-                        await client.DownloadFileTaskAsync(new Uri(((TwitchClip)comboQuality.SelectedItem).url), saveFileDialog.FileName);
-                    }
                     statusMessage.Text = "Done";
                     SetImage("Images/ppHop.gif", true);
                 }
@@ -161,6 +165,23 @@ namespace TwitchDownloaderWPF
                 ImageBehavior.SetAnimatedSource(statusImage, null);
                 statusImage.Source = image;
             }
+        }
+
+        private void btnDonate_Click(object sender, RoutedEventArgs e)
+        {
+            System.Diagnostics.Process.Start("https://www.buymeacoffee.com/lay295");
+        }
+
+        private void btnSettings_Click(object sender, RoutedEventArgs e)
+        {
+            SettingsPage settings = new SettingsPage();
+            settings.ShowDialog();
+            btnDonate.Visibility = Settings.Default.HideDonation ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void btnSettings_Loaded(object sender, RoutedEventArgs e)
+        {
+            btnDonate.Visibility = Settings.Default.HideDonation ? Visibility.Collapsed : Visibility.Visible;
         }
     }
 }

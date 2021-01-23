@@ -79,8 +79,43 @@ public class Comment
     public bool more_replies { get; set; }
 }
 
+public class VideoTime
+{
+    public double start { get; set; }
+    public double end { get; set; }
+}
+
+public class ThirdPartyEmoteData
+{
+    public string id { get; set; }
+    public int imageScale { get; set; }
+    public byte[] data { get; set; }
+    public string name { get; set; }
+}
+
+public class FirstPartyEmoteData
+{
+    public string id { get; set; }
+    public int imageScale { get; set; }
+    public byte[] data { get; set; }
+}
+
+public class Emotes
+{
+    public List<ThirdPartyEmoteData> thirdParty { get; set; }
+    public List<FirstPartyEmoteData> firstParty { get; set; }
+}
+
+public class CommentResponse
+{
+    public List<Comment> comments { get; set; }
+    public string _next { get; set; }
+}
+
 public class ChatRoot
 {
     public Streamer streamer { get; set; }
     public List<Comment> comments { get; set; }
+    public VideoTime video { get; set; }
+    public Emotes emotes { get; set; }
 }

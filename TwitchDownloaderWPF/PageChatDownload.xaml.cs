@@ -22,6 +22,11 @@ using System.Windows.Shapes;
 using Newtonsoft.Json;
 using TwitchDownloaderWPF;
 using WpfAnimatedGif;
+using TwitchDownloaderCore.Options;
+using TwitchDownloaderCore;
+using System.Threading;
+using TwitchDownloader;
+using TwitchDownloader.Properties;
 
 namespace TwitchDownloaderWPF
 {
@@ -35,6 +40,7 @@ namespace TwitchDownloaderWPF
         public DownloadType downloadType;
         public string downloadId;
         public int streamerId;
+        public DateTime currentVideoTime;
         JObject videoData = new JObject();
         public PageChatDownload()
         {
@@ -81,7 +87,7 @@ namespace TwitchDownloaderWPF
                 {
                     if (downloadType == DownloadType.Video)
                     {
-                        Task<JObject> taskInfo = InfoHelper.GetVideoInfo(Int32.Parse(downloadId));
+                        Task<JObject> taskInfo = TwitchHelper.GetVideoInfo(Int32.Parse(downloadId));
                         await Task.WhenAll(taskInfo);
 
                         videoData = taskInfo.Result;
@@ -101,13 +107,14 @@ namespace TwitchDownloaderWPF
                         textTitle.Text = taskInfo.Result["title"].ToString();
                         textStreamer.Text = taskInfo.Result["channel"]["display_name"].ToString();
                         textCreatedAt.Text = taskInfo.Result["created_at"].ToString();
+                        currentVideoTime = taskInfo.Result["created_at"].ToObject<DateTime>().ToLocalTime();
                         streamerId = taskInfo.Result["channel"]["_id"].ToObject<int>();
                         SetEnabled(true, false);
                     }
                     else if (downloadType == DownloadType.Clip)
                     {
                         string clipId = downloadId;
-                        Task<JObject> taskInfo = InfoHelper.GetClipInfo(clipId);
+                        Task<JObject> taskInfo = TwitchHelper.GetClipInfo(clipId);
                         await Task.WhenAll(taskInfo);
 
                         JToken clipData = taskInfo.Result;
@@ -119,6 +126,7 @@ namespace TwitchDownloaderWPF
                         imgThumbnail.Source = taskThumb.Result;
                         textStreamer.Text = clipData["broadcaster"]["display_name"].ToString();
                         textCreatedAt.Text = clipData["created_at"].ToString();
+                        currentVideoTime = clipData["created_at"].ToObject<DateTime>().ToLocalTime();
                         textTitle.Text = clipData["title"].ToString();
                         streamerId = clipData["broadcaster"]["id"].ToObject<int>();
                         SetEnabled(true, false);
@@ -167,110 +175,6 @@ namespace TwitchDownloaderWPF
             return "";
         }
 
-        private void BackgroundDownloadManager_DoWork(object sender, DoWorkEventArgs e)
-        {
-            ChatDownloadInfo clipInfo = (ChatDownloadInfo)e.Argument;
-
-            using (WebClient client = new WebClient())
-            {
-                client.Encoding = Encoding.UTF8;
-                client.Headers.Add("Accept", "application/vnd.twitchtv.v5+json; charset=UTF-8");
-                client.Headers.Add("Client-Id", "kimne78kx3ncx6brgo4mv6wki5h1ko");
-
-                bool isFirst = true;
-                string cursor = "";
-                double latestMessage = clipInfo.offset - 1;
-                double videoStart = clipInfo.offset;
-                double videoDuration = clipInfo.duration;
-                JObject result = new JObject();
-                JArray comments = new JArray();
-                JObject streamer = new JObject();
-
-                streamer["name"] = clipInfo.streamer_name;
-                streamer["id"] = clipInfo.streamer_id;
-
-                while (latestMessage < (videoStart + videoDuration))
-                {
-                    string response;
-                    if (isFirst)
-                        response = client.DownloadString(String.Format("https://api.twitch.tv/v5/videos/{0}/comments?content_offset_seconds={1}", clipInfo.vod_id, clipInfo.offset));
-                    else
-                        response = client.DownloadString(String.Format("https://api.twitch.tv/v5/videos/{0}/comments?cursor={1}", clipInfo.vod_id, cursor));
-
-                    JObject res = JObject.Parse(response);
-
-                    foreach (var comment in res["comments"])
-                    {
-                        if (latestMessage < (videoStart + videoDuration))
-                            comments.Add(comment);
-
-                        latestMessage = comment["content_offset_seconds"].ToObject<double>();
-                    }
-                    if (res["_next"] == null)
-                        break;
-                    else
-                        cursor = res["_next"].ToString();
-
-                    int percent = (int)Math.Floor((latestMessage - videoStart) / videoDuration * 100);
-                    (sender as BackgroundWorker).ReportProgress(percent, String.Format("Downloading {0}%", percent));
-
-                    if (isFirst)
-                        isFirst = false;
-
-                }
-
-                result["streamer"] = streamer;
-                result["comments"] = comments;
-
-                using (StreamWriter sw = new StreamWriter(clipInfo.path))
-                {
-                    if (clipInfo.is_json)
-                    {
-                        sw.Write(result.ToString(Formatting.None));
-                    }
-                    else
-                    {
-                        foreach (var comment in result["comments"])
-                        {
-                            string username = comment["commenter"]["display_name"].ToString();
-                            string message = comment["message"]["body"].ToString();
-                            sw.WriteLine(String.Format("{0}: {1}", username, message));
-                        }
-                    }
-
-                    sw.Flush();
-                    sw.Close();
-                    clipInfo = null;
-                    result = null;
-                }
-            }
-        }
-
-        private void BackgroundDownloadManager_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
-        {
-            btnGetInfo.IsEnabled = true;
-            statusProgressBar.Value = 0;
-            if (e.Error == null)
-            {
-                statusMessage.Text = "Done";
-                SetImage("Images/ppHop.gif", true);
-
-            }
-            else
-            {
-                statusMessage.Text = "ERROR";
-                SetImage("Images/peepoSad.png", false);
-                AppendLog("ERROR: " + e.Error.Message);
-            }
-        }
-
-        private void BackgroundDownloadManager_ProgressChanged(object sender, ProgressChangedEventArgs e)
-        {
-            string message = (string)e.UserState;
-            statusMessage.Text = message;
-            statusProgressBar.Value = e.ProgressPercentage >= 100 ? 100 : e.ProgressPercentage;
-        }
-
         private void AppendLog(string message)
         {
             textLog.Dispatcher.BeginInvoke((Action)(() =>
@@ -278,7 +182,7 @@ namespace TwitchDownloaderWPF
             ));
         }
 
-        private void btnDownload_Click(object sender, RoutedEventArgs e)
+        private async void btnDownload_Click(object sender, RoutedEventArgs e)
         {
             SaveFileDialog saveFileDialog = new SaveFileDialog();
 
@@ -288,50 +192,64 @@ namespace TwitchDownloaderWPF
                 saveFileDialog.Filter = "TXT Files | *.txt";
 
             saveFileDialog.RestoreDirectory = true;
+            saveFileDialog.FileName = MainWindow.GetFilename(Settings.Default.TemplateChat, textTitle.Text, downloadId, currentVideoTime, textStreamer.Text);
 
             if (saveFileDialog.ShowDialog() == true)
             {
                 try
                 {
-                    ChatDownloadInfo info;
+                    ChatDownloadOptions downloadOptions = new ChatDownloadOptions() { IsJson = (bool)radioJson.IsChecked, Filename = saveFileDialog.FileName, Timestamp = true, EmbedEmotes = (bool)checkEmbed.IsChecked };
                     if (downloadType == DownloadType.Video)
                     {
                         int startTime = 0;
-                        int duration = 0;
+                        int endTime = 0;
 
                         if (checkStart.IsChecked == true)
                         {
+                            downloadOptions.CropBeginning = true;
                             TimeSpan start = new TimeSpan((int)numStartHour.Value, (int)numStartMinute.Value, (int)numStartSecond.Value);
                             startTime = (int)Math.Round(start.TotalSeconds);
+                            downloadOptions.CropBeginningTime = startTime;
                         }
 
                         if (checkEnd.IsChecked == true)
                         {
+                            downloadOptions.CropEnding = true;
                             TimeSpan end = new TimeSpan((int)numEndHour.Value, (int)numEndMinute.Value, (int)numEndSecond.Value);
-                            duration = (int)Math.Ceiling(end.TotalSeconds - startTime);
+                            endTime = (int)Math.Round(end.TotalSeconds);
+                            downloadOptions.CropEndingTime = endTime;
                         }
-                        else
-                        {
-                            TimeSpan vodLength = TimeSpan.FromSeconds(videoData["length"].ToObject<int>());
-                            duration = (int)Math.Ceiling(vodLength.TotalSeconds);
-                        }
-                        info = new ChatDownloadInfo(downloadType, textUrl.Text, saveFileDialog.FileName, videoData["_id"].ToString().Substring(1), startTime, duration, (bool)radioJson.IsChecked, textStreamer.Text, streamerId);
+
+                        downloadOptions.Id = videoData["_id"].ToString().Substring(1);
                     }
                     else
-                        info = new ChatDownloadInfo(downloadType, textUrl.Text, saveFileDialog.FileName, videoData["vod"]["id"].ToString(), videoData["vod"]["offset"].ToObject<int>(), videoData["duration"].ToObject<double>(), (bool)radioJson.IsChecked, textStreamer.Text, streamerId);
-                    statusMessage.Text = "Downloading";
+                    {
+                        downloadOptions.Id = downloadId;
+                    }
+
+                    ChatDownloader currentDownload = new ChatDownloader(downloadOptions);
+
                     btnGetInfo.IsEnabled = false;
                     SetEnabled(false, false);
-
-                    BackgroundWorker backgroundDownloadManager = new BackgroundWorker();
-                    backgroundDownloadManager.WorkerReportsProgress = true;
-                    backgroundDownloadManager.DoWork += BackgroundDownloadManager_DoWork;
-                    backgroundDownloadManager.ProgressChanged += BackgroundDownloadManager_ProgressChanged;
-                    backgroundDownloadManager.RunWorkerCompleted += BackgroundDownloadManager_RunWorkerCompleted;
-
                     SetImage("Images/ppOverheat.gif", true);
                     statusMessage.Text = "Downloading";
-                    backgroundDownloadManager.RunWorkerAsync(info);
+
+                    Progress<ProgressReport> downloadProgress = new Progress<ProgressReport>(OnProgressChanged);
+
+                    try
+                    {
+                        await currentDownload.DownloadAsync(downloadProgress, new CancellationToken());
+                        statusMessage.Text = "Done";
+                        SetImage("Images/ppHop.gif", true);
+                    }
+                    catch (Exception ex)
+                    {
+                        statusMessage.Text = "ERROR";
+                        SetImage("Images/peepoSad.png", false);
+                        AppendLog("ERROR: " + ex.Message);
+                    }
+                    btnGetInfo.IsEnabled = true;
+                    statusProgressBar.Value = 0;
                 }
                 catch (Exception ex)
                 {
@@ -340,19 +258,14 @@ namespace TwitchDownloaderWPF
             }
         }
 
-        private TimeSpan GenerateTimespan(string input)
+        private void OnProgressChanged(ProgressReport progress)
         {
-            //There might be a better way to do this, gets string 0h0m0s and returns timespan
-            TimeSpan returnSpan = new TimeSpan(0);
-            string[] inputArray = input.Remove(input.Length - 1).Replace('h', ':').Replace('m', ':').Split(':');
-
-            returnSpan = returnSpan.Add(TimeSpan.FromSeconds(Int32.Parse(inputArray[inputArray.Length - 1])));
-            if (inputArray.Length > 1)
-                returnSpan = returnSpan.Add(TimeSpan.FromMinutes(Int32.Parse(inputArray[inputArray.Length - 2])));
-            if (inputArray.Length > 2)
-                returnSpan = returnSpan.Add(TimeSpan.FromHours(Int32.Parse(inputArray[inputArray.Length - 3])));
-
-            return returnSpan;
+            if (progress.reportType == ReportType.Percent)
+                statusProgressBar.Value = (int)progress.data;
+            if (progress.reportType == ReportType.Message || progress.reportType == ReportType.MessageInfo)
+                statusMessage.Text = (string)progress.data;
+            if (progress.reportType == ReportType.Log)
+                AppendLog((string)progress.data);
         }
 
         public void SetImage(string imageUri, bool isGif)
@@ -368,6 +281,23 @@ namespace TwitchDownloaderWPF
                 ImageBehavior.SetAnimatedSource(statusImage, null);
                 statusImage.Source = image;
             }
+        }
+
+        private void btnDonate_Click(object sender, RoutedEventArgs e)
+        {
+            System.Diagnostics.Process.Start("https://www.buymeacoffee.com/lay295");
+        }
+
+        private void btnSettings_Click(object sender, RoutedEventArgs e)
+        {
+            SettingsPage settings = new SettingsPage();
+            settings.ShowDialog();
+            btnDonate.Visibility = Settings.Default.HideDonation ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void btnSettings_Loaded(object sender, RoutedEventArgs e)
+        {
+            btnDonate.Visibility = Settings.Default.HideDonation ? Visibility.Collapsed : Visibility.Visible;
         }
     }
 }
